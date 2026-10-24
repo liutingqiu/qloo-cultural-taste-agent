@@ -1,108 +1,126 @@
-import { QlooClient } from './qloo-client.js';
-import { QlooMcpServer } from './mcp-server.js';
-import { TasteGraphEngine } from './taste-graph-engine.js';
-
-export class CulturalAgentPipeline {
-  constructor() {
-    this.client = new QlooClient();
-    this.engine = new TasteGraphEngine(this.client);
-    this.mcpServer = new QlooMcpServer(this.client);
-  }
-
-  async planAndExecute(request) {
-    const trace = [];
-    let stepCount = 1;
-
-    const keywords = this.extractKeywords(request.naturalLanguagePrompt, request.userVibeHints);
-    const resolvedAnchorIds = [];
-
-    for (const kw of keywords) {
-      const resolveResult = await this.mcpServer.executeTool('qloo_resolve_entity', { query: kw });
-      trace.push({
-        step: stepCount++,
-        tool: 'qloo_resolve_entity',
-        arguments: { query: kw },
-        observationSummary: resolveResult.found 
-          ? `Found '${resolveResult.entity.name}' in ${resolveResult.entity.domain} with aesthetic '${resolveResult.entity.vibeVectors.aesthetic}'`
-          : `No direct match for '${kw}'`
-      });
-
-      if (resolveResult.found) {
-        resolvedAnchorIds.push(resolveResult.entity.id);
-      }
+/**
+ * Taste agent pipeline: resolve signals, ask Qloo for cross-domain affinity,
+ * aggregate the answers, and keep a trace of every request that produced them.
+ *
+ * Every recommendation carries the Qloo entity id and the affinity score the
+ * API returned for it. Nothing is scored locally.
+ */
+function uniqueById(entities) {
+    const seen = new Map();
+    for (const entity of entities) {
+        const key = entity.id || entity.name;
+        if (!seen.has(key))
+            seen.set(key, entity);
     }
-
-    if (resolvedAnchorIds.length === 0) {
-      resolvedAnchorIds.push('music_my_bloody_valentine');
+    return [...seen.values()];
+}
+export class TasteAgent {
+    client;
+    requests = [];
+    constructor(client) {
+        this.client = client;
     }
-
-    const targetDomains = request.preferredDomains && request.preferredDomains.length > 0
-      ? request.preferredDomains
-      : ['dining', 'film', 'fashion', 'travel'];
-
-    const synthResult = await this.mcpServer.executeTool('qloo_cross_domain_synthesis', {
-      anchorEntityIds: resolvedAnchorIds,
-      targetDomains: targetDomains,
-      strictnessThreshold: 0.50
-    });
-
-    trace.push({
-      step: stepCount++,
-      tool: 'qloo_cross_domain_synthesis',
-      arguments: {
-        anchorEntityIds: resolvedAnchorIds,
-        targetDomains
-      },
-      observationSummary: `Synthesized ${synthResult.recommendations.length} culturally coherent cross-domain entities.`
-    });
-
-    const allEntitiesToAudit = [...resolvedAnchorIds, ...synthResult.recommendations.map(r => r.recommendedEntity.id)];
-    const auditResult = await this.mcpServer.executeTool('qloo_audit_cultural_fit', {
-      entityIds: allEntitiesToAudit
-    });
-
-    trace.push({
-      step: stepCount++,
-      tool: 'qloo_audit_cultural_fit',
-      arguments: { entityIds: allEntitiesToAudit },
-      observationSummary: `Cultural coherence score: ${auditResult.overallCoherenceScore}% (${auditResult.verdict})`
-    });
-
-    const culturalItinerary = synthResult.recommendations.map(rec => ({
-      domain: rec.domain.toUpperCase(),
-      title: rec.recommendedEntity.name,
-      culturalHarmonyRating: Math.round(rec.compositeAffinityScore * 100),
-      explanation: rec.culturalJustification
-    }));
-
-    const agentSummary = `Successfully synthesized a culturally grounded itinerary with ${auditResult.overallCoherenceScore}% overall taste harmony. Grounded in ${resolvedAnchorIds.length} anchor tastes across ${culturalItinerary.length} cross-domain recommendations.`;
-
-    return {
-      inferredTasteAnchors: resolvedAnchorIds,
-      executionTrace: trace,
-      culturalItinerary,
-      overallCoherenceScore: auditResult.overallCoherenceScore,
-      agentSummary
+    get configured() {
+        return this.client.configured;
+    }
+    recordRequests = (record) => {
+        this.requests.push(record);
     };
-  }
-
-  extractKeywords(prompt, hints) {
-    const list = hints ? [...hints] : [];
-    const p = prompt.toLowerCase();
-
-    if (p.includes('shoegaze') || p.includes('bloody valentine')) list.push('shoegaze');
-    if (p.includes('jazz') || p.includes('miles davis')) list.push('modal jazz');
-    if (p.includes('ambient') || p.includes('aphex twin') || p.includes('electronic')) list.push('idm');
-    if (p.includes('wine') || p.includes('natural wine')) list.push('natural wine');
-    if (p.includes('coffee') || p.includes('kissaten')) list.push('kissaten');
-    if (p.includes('ferment') || p.includes('nordic')) list.push('nordic fermentation');
-    if (p.includes('wong kar') || p.includes('chungking')) list.push('wong kar-wai');
-    if (p.includes('blade runner') || p.includes('cyberpunk')) list.push('blade runner');
-    if (p.includes('pleat') || p.includes('issey miyake')) list.push('issey miyake');
-    if (p.includes('workwear') || p.includes('vintage')) list.push('heritage workwear');
-    if (p.includes('kyoto') || p.includes('zen')) list.push('kyoto');
-    if (p.includes('berlin')) list.push('berlin');
-
-    return [...new Set(list)];
-  }
+    /** Same array the result carries, exposed for the CLI. */
+    get requestLog() {
+        return this.requests;
+    }
+    async time(step, domain, fn, count) {
+        const started = Date.now();
+        try {
+            const value = await fn();
+            return { step: { step, domain, ok: true, entityCount: count(value), durationMs: Date.now() - started }, value };
+        }
+        catch (error) {
+            return {
+                step: {
+                    step,
+                    domain,
+                    ok: false,
+                    entityCount: 0,
+                    durationMs: Date.now() - started,
+                    detail: error instanceof Error ? error.message.slice(0, 220) : String(error),
+                },
+            };
+        }
+    }
+    /** Thin passthroughs used by the MCP tools, kept here so every call is traced. */
+    async searchOnly(query, type) {
+        return this.client.search(query, type, 5);
+    }
+    async insightsOnly(signalEntityId, filterType, take = 10) {
+        return this.client.insights({ filterType, signEntities: [signalEntityId], take });
+    }
+    async recommend(request) {
+        const trace = [];
+        const errors = [];
+        const take = request.take ?? 10;
+        const seedRun = await this.time('search.seeds', request.seedDomain, () => this.client.search(request.description, request.seedDomain, 3), (entities) => entities.length);
+        trace.push(seedRun.step);
+        const seeds = uniqueById(seedRun.value ?? []);
+        if (!seeds.length) {
+            errors.push(seedRun.step.detail ?? 'no seed entity resolved for the description');
+            return { query: request, seeds: [], recommendations: [], trace, requests: [...this.requests], errors };
+        }
+        const pooled = new Map();
+        for (const domain of request.targetDomains) {
+            for (const seed of seeds) {
+                const label = 'insights.' + domain + '<-' + (seed.name || seed.id);
+                const run = await this.time(label, domain, () => this.client.insights({ filterType: domain, signEntities: [seed.id], take }), (entities) => entities.length);
+                trace.push(run.step);
+                if (!run.step.ok) {
+                    if (run.step.detail)
+                        errors.push(run.step.detail);
+                    continue;
+                }
+                for (const entity of run.value ?? []) {
+                    const key = domain + ':' + entity.id;
+                    const candidate = {
+                        domain,
+                        id: entity.id,
+                        name: entity.name,
+                        affinity: entity.affinity,
+                        tags: entity.tags,
+                        viaSeed: seed.id,
+                    };
+                    const existing = pooled.get(key);
+                    if (!existing || (candidate.affinity ?? -1) > (existing.affinity ?? -1)) {
+                        pooled.set(key, candidate);
+                    }
+                }
+            }
+        }
+        const recommendations = [...pooled.values()].sort((a, b) => {
+            const diff = (b.affinity ?? -1) - (a.affinity ?? -1);
+            return diff !== 0 ? diff : a.name.localeCompare(b.name);
+        });
+        return { query: request, seeds, recommendations, trace, requests: [...this.requests], errors };
+    }
+}
+export function summarise(result) {
+    const durations = result.requests.map((request) => request.durationMs).sort((a, b) => a - b);
+    const pct = (p) => durations.length ? durations[Math.min(durations.length - 1, Math.floor(durations.length * p))] : null;
+    const byDomain = {};
+    for (const rec of result.recommendations) {
+        byDomain[rec.domain] = (byDomain[rec.domain] ?? 0) + 1;
+    }
+    return {
+        seeds: result.seeds.length,
+        recommendations: result.recommendations.length,
+        byDomain,
+        requests: result.requests.length,
+        retries: result.requests.filter((request) => request.attempt > 0).length,
+        httpStatuses: [...new Set(result.requests.map((request) => request.status))].sort((a, b) => a - b),
+        latencyMs: {
+            p50: pct(0.5),
+            p95: pct(0.95),
+            max: durations.length ? durations[durations.length - 1] : null,
+        },
+        errors: result.errors,
+    };
 }

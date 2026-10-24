@@ -1,147 +1,189 @@
-import { QlooClient } from './qloo-client.js';
-import { QlooMcpServer } from './mcp-server.js';
-import { TasteGraphEngine } from './taste-graph-engine.js';
+/**
+ * Taste agent pipeline: resolve signals, ask Qloo for cross-domain affinity,
+ * aggregate the answers, and keep a trace of every request that produced them.
+ *
+ * Every recommendation carries the Qloo entity id and the affinity score the
+ * API returned for it. Nothing is scored locally.
+ */
 
-export interface AgentPlanRequest {
-  naturalLanguagePrompt: string;
-  userVibeHints?: string[];
-  preferredDomains?: ('music' | 'film' | 'dining' | 'fashion' | 'travel')[];
+import { QlooClient, QlooDomain, QlooEntity, RequestRecord } from './qloo-client.js';
+
+export interface TasteRequest {
+  description: string;
+  seedDomain: QlooDomain;
+  targetDomains: QlooDomain[];
+  take?: number;
 }
 
-export interface AgentExecutionStep {
-  step: number;
-  tool: string;
-  arguments: Record<string, any>;
-  observationSummary: string;
+export interface TraceStep {
+  step: string;
+  domain?: QlooDomain;
+  ok: boolean;
+  entityCount: number;
+  durationMs: number;
+  detail?: string;
 }
 
-export interface AgentPlanResult {
-  inferredTasteAnchors: string[];
-  executionTrace: AgentExecutionStep[];
-  culturalItinerary: {
-    domain: string;
-    title: string;
-    culturalHarmonyRating: number;
-    explanation: string;
-  }[];
-  overallCoherenceScore: number;
-  agentSummary: string;
+export interface Recommendation {
+  domain: QlooDomain;
+  id: string;
+  name: string;
+  affinity: number | null;
+  tags: string[];
+  viaSeed: string;
 }
 
-export class CulturalAgentPipeline {
-  private mcpServer: QlooMcpServer;
-  private client: QlooClient;
-  private engine: TasteGraphEngine;
+export interface TasteResult {
+  query: TasteRequest;
+  seeds: QlooEntity[];
+  recommendations: Recommendation[];
+  trace: TraceStep[];
+  requests: RequestRecord[];
+  errors: string[];
+}
 
-  constructor() {
-    this.client = new QlooClient();
-    this.engine = new TasteGraphEngine(this.client);
-    this.mcpServer = new QlooMcpServer(this.client);
+function uniqueById(entities: QlooEntity[]): QlooEntity[] {
+  const seen = new Map<string, QlooEntity>();
+  for (const entity of entities) {
+    const key = entity.id || entity.name;
+    if (!seen.has(key)) seen.set(key, entity);
+  }
+  return [...seen.values()];
+}
+
+export class TasteAgent {
+  private readonly requests: RequestRecord[] = [];
+
+  constructor(private readonly client: QlooClient) {}
+
+  get configured(): boolean {
+    return this.client.configured;
   }
 
-  /**
-   * Run agentic planning with Qloo taste graph grounding
-   */
-  public async planAndExecute(request: AgentPlanRequest): Promise<AgentPlanResult> {
-    const trace: AgentExecutionStep[] = [];
-    let stepCount = 1;
+  recordRequests = (record: RequestRecord): void => {
+    this.requests.push(record);
+  };
 
-    // Step 1: Parse keywords from prompt and resolve taste anchors
-    const keywords = this.extractKeywords(request.naturalLanguagePrompt, request.userVibeHints);
-    const resolvedAnchorIds: string[] = [];
+  /** Same array the result carries, exposed for the CLI. */
+  get requestLog(): RequestRecord[] {
+    return this.requests;
+  }
 
-    for (const kw of keywords) {
-      const resolveResult = await this.mcpServer.executeTool('qloo_resolve_entity', { query: kw });
-      trace.push({
-        step: stepCount++,
-        tool: 'qloo_resolve_entity',
-        arguments: { query: kw },
-        observationSummary: resolveResult.found 
-          ? `Found '${resolveResult.entity.name}' in ${resolveResult.entity.domain} with aesthetic '${resolveResult.entity.vibeVectors.aesthetic}'`
-          : `No direct match for '${kw}'`
-      });
+  private async time<T>(
+    step: string,
+    domain: QlooDomain | undefined,
+    fn: () => Promise<T>,
+    count: (value: T) => number,
+  ): Promise<{ step: TraceStep; value?: T }> {
+    const started = Date.now();
+    try {
+      const value = await fn();
+      return { step: { step, domain, ok: true, entityCount: count(value), durationMs: Date.now() - started }, value };
+    } catch (error) {
+      return {
+        step: {
+          step,
+          domain,
+          ok: false,
+          entityCount: 0,
+          durationMs: Date.now() - started,
+          detail: error instanceof Error ? error.message.slice(0, 220) : String(error),
+        },
+      };
+    }
+  }
 
-      if (resolveResult.found) {
-        resolvedAnchorIds.push(resolveResult.entity.id);
+  /** Thin passthroughs used by the MCP tools, kept here so every call is traced. */
+  async searchOnly(query: string, type?: QlooDomain): Promise<QlooEntity[]> {
+    return this.client.search(query, type, 5);
+  }
+
+  async insightsOnly(signalEntityId: string, filterType: QlooDomain, take = 10): Promise<QlooEntity[]> {
+    return this.client.insights({ filterType, signEntities: [signalEntityId], take });
+  }
+
+  async recommend(request: TasteRequest): Promise<TasteResult> {
+    const trace: TraceStep[] = [];
+    const errors: string[] = [];
+    const take = request.take ?? 10;
+
+    const seedRun = await this.time(
+      'search.seeds',
+      request.seedDomain,
+      () => this.client.search(request.description, request.seedDomain, 3),
+      (entities) => entities.length,
+    );
+    trace.push(seedRun.step);
+    const seeds = uniqueById(seedRun.value ?? []);
+
+    if (!seeds.length) {
+      errors.push(seedRun.step.detail ?? 'no seed entity resolved for the description');
+      return { query: request, seeds: [], recommendations: [], trace, requests: [...this.requests], errors };
+    }
+
+    const pooled = new Map<string, Recommendation>();
+
+    for (const domain of request.targetDomains) {
+      for (const seed of seeds) {
+        const label = 'insights.' + domain + '<-' + (seed.name || seed.id);
+        const run = await this.time(
+          label,
+          domain,
+          () => this.client.insights({ filterType: domain, signEntities: [seed.id], take }),
+          (entities) => entities.length,
+        );
+        trace.push(run.step);
+        if (!run.step.ok) {
+          if (run.step.detail) errors.push(run.step.detail);
+          continue;
+        }
+        for (const entity of run.value ?? []) {
+          const key = domain + ':' + entity.id;
+          const candidate: Recommendation = {
+            domain,
+            id: entity.id,
+            name: entity.name,
+            affinity: entity.affinity,
+            tags: entity.tags,
+            viaSeed: seed.id,
+          };
+          const existing = pooled.get(key);
+          if (!existing || (candidate.affinity ?? -1) > (existing.affinity ?? -1)) {
+            pooled.set(key, candidate);
+          }
+        }
       }
     }
 
-    // Default to at least one strong anchor if none resolved
-    if (resolvedAnchorIds.length === 0) {
-      resolvedAnchorIds.push('music_my_bloody_valentine');
-    }
-
-    // Step 2: Determine target domains
-    const targetDomains = request.preferredDomains && request.preferredDomains.length > 0
-      ? request.preferredDomains
-      : ['dining', 'film', 'fashion', 'travel'];
-
-    // Step 3: Run cross-domain taste synthesis via MCP
-    const synthResult = await this.mcpServer.executeTool('qloo_cross_domain_synthesis', {
-      anchorEntityIds: resolvedAnchorIds,
-      targetDomains: targetDomains,
-      strictnessThreshold: 0.50
+    const recommendations = [...pooled.values()].sort((a, b) => {
+      const diff = (b.affinity ?? -1) - (a.affinity ?? -1);
+      return diff !== 0 ? diff : a.name.localeCompare(b.name);
     });
 
-    trace.push({
-      step: stepCount++,
-      tool: 'qloo_cross_domain_synthesis',
-      arguments: {
-        anchorEntityIds: resolvedAnchorIds,
-        targetDomains
-      },
-      observationSummary: `Synthesized ${synthResult.recommendations.length} culturally coherent cross-domain entities.`
-    });
-
-    // Step 4: Audit overall itinerary
-    const allEntitiesToAudit = [...resolvedAnchorIds, ...synthResult.recommendations.map((r: any) => r.recommendedEntity.id)];
-    const auditResult = await this.mcpServer.executeTool('qloo_audit_cultural_fit', {
-      entityIds: allEntitiesToAudit
-    });
-
-    trace.push({
-      step: stepCount++,
-      tool: 'qloo_audit_cultural_fit',
-      arguments: { entityIds: allEntitiesToAudit },
-      observationSummary: `Cultural coherence score: ${auditResult.overallCoherenceScore}% (${auditResult.verdict})`
-    });
-
-    // Format output itinerary
-    const culturalItinerary = synthResult.recommendations.map((rec: any) => ({
-      domain: rec.domain.toUpperCase(),
-      title: rec.recommendedEntity.name,
-      culturalHarmonyRating: Math.round(rec.compositeAffinityScore * 100),
-      explanation: rec.culturalJustification
-    }));
-
-    const agentSummary = `Successfully synthesized a culturally grounded itinerary with ${auditResult.overallCoherenceScore}% overall taste harmony. Grounded in ${resolvedAnchorIds.length} anchor tastes across ${culturalItinerary.length} cross-domain recommendations.`;
-
-    return {
-      inferredTasteAnchors: resolvedAnchorIds,
-      executionTrace: trace,
-      culturalItinerary,
-      overallCoherenceScore: auditResult.overallCoherenceScore,
-      agentSummary
-    };
+    return { query: request, seeds, recommendations, trace, requests: [...this.requests], errors };
   }
+}
 
-  private extractKeywords(prompt: string, hints?: string[]): string[] {
-    const list: string[] = hints ? [...hints] : [];
-    const p = prompt.toLowerCase();
-
-    if (p.includes('shoegaze') || p.includes('bloody valentine')) list.push('shoegaze');
-    if (p.includes('jazz') || p.includes('miles davis')) list.push('modal jazz');
-    if (p.includes('ambient') || p.includes('aphex twin') || p.includes('electronic')) list.push('idm');
-    if (p.includes('wine') || p.includes('natural wine')) list.push('natural wine');
-    if (p.includes('coffee') || p.includes('kissaten')) list.push('kissaten');
-    if (p.includes('ferment') || p.includes('nordic')) list.push('nordic fermentation');
-    if (p.includes('wong kar') || p.includes('chungking')) list.push('wong kar-wai');
-    if (p.includes('blade runner') || p.includes('cyberpunk')) list.push('blade runner');
-    if (p.includes('pleat') || p.includes('issey miyake')) list.push('issey miyake');
-    if (p.includes('workwear') || p.includes('vintage')) list.push('heritage workwear');
-    if (p.includes('kyoto') || p.includes('zen')) list.push('kyoto');
-    if (p.includes('berlin')) list.push('berlin');
-
-    return [...new Set(list)];
+export function summarise(result: TasteResult): Record<string, unknown> {
+  const durations = result.requests.map((request) => request.durationMs).sort((a, b) => a - b);
+  const pct = (p: number) =>
+    durations.length ? durations[Math.min(durations.length - 1, Math.floor(durations.length * p))] : null;
+  const byDomain: Record<string, number> = {};
+  for (const rec of result.recommendations) {
+    byDomain[rec.domain] = (byDomain[rec.domain] ?? 0) + 1;
   }
+  return {
+    seeds: result.seeds.length,
+    recommendations: result.recommendations.length,
+    byDomain,
+    requests: result.requests.length,
+    retries: result.requests.filter((request) => request.attempt > 0).length,
+    httpStatuses: [...new Set(result.requests.map((request) => request.status))].sort((a, b) => a - b),
+    latencyMs: {
+      p50: pct(0.5),
+      p95: pct(0.95),
+      max: durations.length ? durations[durations.length - 1] : null,
+    },
+    errors: result.errors,
+  };
 }

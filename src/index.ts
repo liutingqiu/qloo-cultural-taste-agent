@@ -1,4 +1,5 @@
-export * from './qloo-client.js';
-export * from './taste-graph-engine.js';
-export * from './mcp-server.js';
-export * from './agent-pipeline.js';
+export { QlooClient, QlooAuthError, QlooHttpError, DOMAIN_URN } from "./qloo-client.js";
+export { TasteAgent, summarise } from "./agent-pipeline.js";
+export { QlooMcpServer, TOOL_SCHEMA } from "./mcp-server.js";
+export type { QlooDomain, QlooEntity, RequestRecord, QlooClientConfig } from "./qloo-client.js";
+export type { TasteRequest, TasteResult, Recommendation, TraceStep } from "./agent-pipeline.js";

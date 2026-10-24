@@ -1,0 +1,36 @@
+{
+  "search": {
+    "artist": [
+      { "slug": "shoegaze", "entity_id": "qloo:artist:mbv", "name": "My Bloody Valentine", "type": "urn:entity:artist", "properties": { "name": "My Bloody Valentine" } },
+      { "slug": "slowdive", "entity_id": "qloo:artist:slowdive", "name": "Slowdive", "type": "urn:entity:artist", "properties": { "name": "Slowdive" } }
+    ],
+    "movie": [
+      { "slug": "wong", "entity_id": "qloo:movie:itmfl", "name": "In the Mood for Love", "type": "urn:entity:movie", "properties": { "name": "In the Mood for Love" } }
+    ]
+  },
+  "insights": {
+    "movie": [
+      { "entity_id": "qloo:movie:itmfl", "name": "In the Mood for Love", "base_affinity": 0.58, "tags": ["arthouse", "melancholic", "90s-hong-kong"] },
+      { "entity_id": "qloo:movie:br2049", "name": "Blade Runner 2049", "base_affinity": 0.41, "tags": ["cyberpunk", "meditative"] },
+      { "entity_id": "qloo:movie:chungking", "name": "Chungking Express", "base_affinity": 0.52, "tags": ["90s-hong-kong", "romance"] }
+    ],
+    "place": [
+      { "entity_id": "qloo:place:kissaten", "name": "Slow-Drip Kissaten", "base_affinity": 0.47, "tags": ["analog", "quiet"] },
+      { "entity_id": "qloo:place:natural-wine", "name": "Natural Wine Bistrot", "base_affinity": 0.36, "tags": ["fermented", "convivial"] },
+      { "entity_id": "qloo:place:vinyl-bar", "name": "Vinyl Listening Bar", "base_affinity": 0.55, "tags": ["analog", "nocturnal"] }
+    ],
+    "artist": [
+      { "entity_id": "qloo:artist:aphex", "name": "Aphex Twin", "base_affinity": 0.39, "tags": ["idm", "cerebral"] },
+      { "entity_id": "qloo:artist:cocteau", "name": "Cocteau Twins", "base_affinity": 0.61, "tags": ["dream-pop", "ethereal"] }
+    ]
+  },
+  "affinity": {
+    "qloo:artist:mbv": { "qloo:movie:chungking": 0.14, "qloo:place:vinyl-bar": 0.12, "qloo:artist:cocteau": 0.1 },
+    "qloo:artist:slowdive": { "qloo:movie:itmfl": 0.09, "qloo:place:kissaten": 0.11 }
+  },
+  "tags": [
+    { "tag_id": "urn:tag:genre:shoegaze", "name": "shoegaze" },
+    { "tag_id": "urn:tag:genre:dream-pop", "name": "dream-pop" },
+    { "tag_id": "urn:tag:cuisine:japanese", "name": "japanese" }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "seeds": 1,
+  "recommendations": 8,
+  "byDomain": {
+    "artist": 2,
+    "place": 3,
+    "movie": 3
+  },
+  "requests": 4,
+  "retries": 0,
+  "httpStatuses": [
+    200
+  ],
+  "latencyMs": {
+    "p50": 57,
+    "p95": 62,
+    "max": 62
+  },
+  "errors": [],
+  "wallMs": 214,
+  "endpoint": "contract-server",
+  "baseUrl": "http://127.0.0.1:8787"
+}

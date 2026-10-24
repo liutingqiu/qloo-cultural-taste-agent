@@ -1,250 +1,278 @@
 /**
- * Qloo API Client & Cultural Taste Graph Interface
- * Official Qloo API Reference: https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide
+ * Qloo Insights API client.
+ *
+ * Endpoint facts taken from the hackathon developer guide:
+ *   - base URL for hackathon keys is https://hackathon.api.qloo.com
+ *   - /v2/insights is a GET request; parameters live in the query string
+ *   - authentication is either X-Api-Key: <key> or Authorization: Bearer <key>
+ *   - /search resolves human names to entity ids, /v2/tags resolves tag ids
+ *   - /recommendations and /recs are legacy and unsupported
+ *
+ * There is no curated offline dataset here. When the key is absent the client
+ * refuses to answer instead of inventing entities, and the contract server in
+ * scripts/contract-server.mjs exists so the transport path can still be tested.
  */
 
-export type QlooDomain = 'music' | 'film' | 'dining' | 'fashion' | 'travel' | 'books';
+export type QlooDomain =
+  | 'artist'
+  | 'book'
+  | 'brand'
+  | 'locality'
+  | 'movie'
+  | 'person'
+  | 'place'
+  | 'podcast'
+  | 'tv_show'
+  | 'videogame';
 
-export interface QlooEntity {
-  id: string;
-  name: string;
-  domain: QlooDomain;
-  subcategories: string[];
-  vibeVectors: {
-    aesthetic: string;       // e.g. "minimalist", "brutalist", "vintage", "avant-garde", "warm-artisanal"
-    energyLevel: number;     // 0.0 (ambient/chill) - 1.0 (kinetic/intense)
-    exclusivityIndex: number;// 0.0 (mass-market) - 1.0 (subcultural/niche)
-    culturalEra: string;     // e.g. "90s-indie", "contemporary-nordic", "70s-analog", "futuristic-tokyo"
-  };
-  tags: string[];
-  popularityScore: number;
-}
-
-export interface TasteCorrelation {
-  sourceEntityId: string;
-  targetEntityId: string;
-  sourceDomain: QlooDomain;
-  targetDomain: QlooDomain;
-  affinityScore: number;    // 0.00 - 1.00
-  coherenceReasoning: string;
-  sharedAestheticTags: string[];
-}
+export const DOMAIN_URN: Record<QlooDomain, string> = {
+  artist: 'urn:entity:artist',
+  book: 'urn:entity:book',
+  brand: 'urn:entity:brand',
+  locality: 'urn:entity:locality',
+  movie: 'urn:entity:movie',
+  person: 'urn:entity:person',
+  place: 'urn:entity:place',
+  podcast: 'urn:entity:podcast',
+  tv_show: 'urn:entity:tv_show',
+  videogame: 'urn:entity:videogame',
+};
 
 export interface QlooClientConfig {
   apiKey?: string;
   baseUrl?: string;
   timeoutMs?: number;
+  maxRetries?: number;
+  fetchImpl?: typeof fetch;
+  onRequest?: (record: RequestRecord) => void;
 }
 
+export interface RequestRecord {
+  method: 'GET';
+  url: string;
+  status: number;
+  durationMs: number;
+  attempt: number;
+  endpoint: string;
+}
+
+export interface QlooEntity {
+  id: string;
+  name: string;
+  type: string;
+  affinity: number | null;
+  tags: string[];
+  raw: Record<string, unknown>;
+}
+
+export class QlooAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QlooAuthError';
+  }
+}
+
+export class QlooHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+    readonly url: string,
+  ) {
+    super('Qloo request failed: HTTP ' + status + ' from ' + url + ' :: ' + body.slice(0, 200));
+    this.name = 'QlooHttpError';
+  }
+}
+
+const DEFAULT_BASE_URL = 'https://hackathon.api.qloo.com';
+
 export class QlooClient {
-  private apiKey: string;
-  private baseUrl: string;
-  private timeoutMs: number;
-
-  // Curated knowledge graph for autonomous offline verification & zero-latency edge operation
-  private static readonly CURATED_TASTE_GRAPH: Record<string, QlooEntity> = {
-    // Music
-    'music_my_bloody_valentine': {
-      id: 'music_my_bloody_valentine',
-      name: 'My Bloody Valentine (Shoegaze)',
-      domain: 'music',
-      subcategories: ['shoegaze', 'dream-pop', 'alternative-rock'],
-      vibeVectors: {
-        aesthetic: 'ethereal-distortion',
-        energyLevel: 0.65,
-        exclusivityIndex: 0.82,
-        culturalEra: '90s-indie'
-      },
-      tags: ['fuzzy', 'analog', 'introspective', 'lo-fi', 'cult-classic', 'subcultural', 'unfiltered'],
-      popularityScore: 0.74
-    },
-    'music_miles_davis_kind_of_blue': {
-      id: 'music_miles_davis_kind_of_blue',
-      name: 'Miles Davis - Modal Jazz',
-      domain: 'music',
-      subcategories: ['modal-jazz', 'cool-jazz', 'instrumental'],
-      vibeVectors: {
-        aesthetic: 'minimalist-sophistication',
-        energyLevel: 0.35,
-        exclusivityIndex: 0.65,
-        culturalEra: 'late-50s-timeless'
-      },
-      tags: ['meditative', 'refined', 'acoustic', 'acoustic-depth', 'nocturnal'],
-      popularityScore: 0.92
-    },
-    'music_aphex_twin': {
-      id: 'music_aphex_twin',
-      name: 'Aphex Twin (IDM / Ambient)',
-      domain: 'music',
-      subcategories: ['idm', 'ambient-techno', 'experimental-electronic'],
-      vibeVectors: {
-        aesthetic: 'futuristic-glitch',
-        energyLevel: 0.55,
-        exclusivityIndex: 0.88,
-        culturalEra: '90s-cyberpunk'
-      },
-      tags: ['cerebral', 'algorithmic', 'complex-polyrhythm', 'subversive'],
-      popularityScore: 0.81
-    },
-
-    // Dining & Drinks
-    'dining_natural_wine_bistrot': {
-      id: 'dining_natural_wine_bistrot',
-      name: 'Cave à Manger (Low-Intervention Natural Wine & Small Plates)',
-      domain: 'dining',
-      subcategories: ['natural-wine', 'neo-bistro', 'fermented-produce'],
-      vibeVectors: {
-        aesthetic: 'warm-artisanal',
-        energyLevel: 0.50,
-        exclusivityIndex: 0.78,
-        culturalEra: 'contemporary-terroir'
-      },
-      tags: ['funky-pet-nat', 'unfiltered', 'organic', 'convivial', 'intimate', 'subcultural', 'analog'],
-      popularityScore: 0.68
-    },
-    'dining_kyoto_kissaten': {
-      id: 'dining_kyoto_kissaten',
-      name: 'Slow-Drip Jazz Kissaten (Charcoal Roasted Siphon Coffee)',
-      domain: 'dining',
-      subcategories: ['kissaten', 'specialty-coffee', 'vinyl-listening-bar'],
-      vibeVectors: {
-        aesthetic: 'minimalist-sophistication',
-        energyLevel: 0.25,
-        exclusivityIndex: 0.85,
-        culturalEra: 'mid-century-showa'
-      },
-      tags: ['meditative', 'analog', 'acoustic-depth', 'woodcraft', 'nocturnal'],
-      popularityScore: 0.62
-    },
-    'dining_brutalist_fermentation_lab': {
-      id: 'dining_brutalist_fermentation_lab',
-      name: 'Nordic Fermentation Lab (Minimalist Foraged Gastronomy)',
-      domain: 'dining',
-      subcategories: ['new-nordic', 'micro-seasonal', 'sustainable-gastronomy'],
-      vibeVectors: {
-        aesthetic: 'brutalist-clean',
-        energyLevel: 0.40,
-        exclusivityIndex: 0.92,
-        culturalEra: 'contemporary-nordic'
-      },
-      tags: ['cerebral', 'foraged', 'monochrome', 'umami-forward'],
-      popularityScore: 0.75
-    },
-
-    // Film
-    'film_wong_kar_wai': {
-      id: 'film_wong_kar_wai',
-      name: 'In the Mood for Love / Chungking Express (Wong Kar-wai)',
-      domain: 'film',
-      subcategories: ['neo-noir', 'arthouse-romance', 'visual-poetry'],
-      vibeVectors: {
-        aesthetic: 'nostalgic-neon',
-        energyLevel: 0.45,
-        exclusivityIndex: 0.76,
-        culturalEra: '90s-hong-kong'
-      },
-      tags: ['longing', 'step-printed', 'atmospheric', 'melancholic', 'analog'],
-      popularityScore: 0.88
-    },
-    'film_blade_runner_2049': {
-      id: 'film_blade_runner_2049',
-      name: 'Blade Runner 2049 (Denis Villeneuve)',
-      domain: 'film',
-      subcategories: ['cyberpunk-scifi', 'philosophical-noir', 'cinematographic-scale'],
-      vibeVectors: {
-        aesthetic: 'futuristic-glitch',
-        energyLevel: 0.70,
-        exclusivityIndex: 0.60,
-        culturalEra: 'dystopian-future'
-      },
-      tags: ['cerebral', 'brutalist-clean', 'synth-drones', 'existential'],
-      popularityScore: 0.94
-    },
-
-    // Fashion & Design
-    'fashion_issey_miyake_pleats': {
-      id: 'fashion_issey_miyake_pleats',
-      name: 'Issey Miyake Homme Plissé (Architectural Drape)',
-      domain: 'fashion',
-      subcategories: ['avant-garde', 'micro-pleated', 'japanese-minimalism'],
-      vibeVectors: {
-        aesthetic: 'minimalist-sophistication',
-        energyLevel: 0.40,
-        exclusivityIndex: 0.83,
-        culturalEra: 'contemporary-tokyo'
-      },
-      tags: ['structural', 'breathable', 'geometric', 'tactile-elegance'],
-      popularityScore: 0.80
-    },
-    'fashion_vintage_workwear': {
-      id: 'fashion_vintage_workwear',
-      name: 'French Moleskin & Heritage Selvedge Denim',
-      domain: 'fashion',
-      subcategories: ['heritage-workwear', 'vintage-utilitarian', 'slow-fashion'],
-      vibeVectors: {
-        aesthetic: 'warm-artisanal',
-        energyLevel: 0.30,
-        exclusivityIndex: 0.72,
-        culturalEra: 'mid-century-utilitarian'
-      },
-      tags: ['patina', 'organic', 'durable', 'unpretentious', 'analog'],
-      popularityScore: 0.77
-    },
-
-    // Travel & Destinations
-    'travel_kyoto_higashiyama': {
-      id: 'travel_kyoto_higashiyama',
-      name: 'Kyoto Zen Architecture & Hidden Machiya Stay',
-      domain: 'travel',
-      subcategories: ['cultural-heritage', 'zen-aesthetic', 'tranquility-travel'],
-      vibeVectors: {
-        aesthetic: 'minimalist-sophistication',
-        energyLevel: 0.20,
-        exclusivityIndex: 0.86,
-        culturalEra: 'timeless-tradition'
-      },
-      tags: ['meditative', 'woodcraft', 'contemplative', 'analog', 'refined'],
-      popularityScore: 0.89
-    },
-    'travel_berlin_kreuzberg': {
-      id: 'travel_berlin_kreuzberg',
-      name: 'Berlin Kreuzberg Contemporary Art & Sound Labs',
-      domain: 'travel',
-      subcategories: ['subcultural-hub', 'sound-art', 'counter-culture'],
-      vibeVectors: {
-        aesthetic: 'ethereal-distortion',
-        energyLevel: 0.75,
-        exclusivityIndex: 0.79,
-        culturalEra: 'post-industrial-berlin'
-      },
-      tags: ['brutalist-clean', 'subversive', 'unfiltered', 'experimental'],
-      popularityScore: 0.84
-    }
-  };
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+  private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly fetchImpl: typeof fetch;
+  private readonly onRequest?: (record: RequestRecord) => void;
 
   constructor(config: QlooClientConfig = {}) {
-    this.apiKey = config.apiKey || process.env.QLOO_API_KEY || 'qloo_hackathon_agent_key_2026';
-    this.baseUrl = config.baseUrl || 'https://api.qloo.com/v2';
-    this.timeoutMs = config.timeoutMs || 8000;
+    this.apiKey = config.apiKey ?? process.env.QLOO_API_KEY ?? '';
+    this.baseUrl = (config.baseUrl ?? process.env.QLOO_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    this.timeoutMs = config.timeoutMs ?? 12_000;
+    this.maxRetries = config.maxRetries ?? 2;
+    this.fetchImpl = config.fetchImpl ?? fetch;
+    this.onRequest = config.onRequest;
+  }
+
+  get configured(): boolean {
+    return this.apiKey.length > 0;
+  }
+
+  /** True when talking to a non-production base URL, which the report must disclose. */
+  get isLocalEndpoint(): boolean {
+    return !/qloo\.com$/i.test(new URL(this.baseUrl).hostname);
+  }
+
+  private async request(path: string, params: Record<string, string | number | undefined>): Promise<unknown> {
+    if (!this.apiKey) {
+      throw new QlooAuthError(
+        'QLOO_API_KEY is not set. Request a hackathon key with the form linked from the Qloo developer guide.',
+      );
+    }
+    const url = new URL(this.baseUrl + path);
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
+    }
+
+    let attempt = 0;
+    let lastError: unknown;
+    while (attempt <= this.maxRetries) {
+      const started = Date.now();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      try {
+        const response = await this.fetchImpl(url.toString(), {
+          method: 'GET',
+          headers: {
+            'X-Api-Key': this.apiKey,
+            Authorization: 'Bearer ' + this.apiKey,
+            Accept: 'application/json',
+          },
+          signal: controller.signal,
+        });
+        const text = await response.text();
+        this.onRequest?.({
+          method: 'GET',
+          url: url.toString(),
+          status: response.status,
+          durationMs: Date.now() - started,
+          attempt,
+          endpoint: path,
+        });
+        if (response.status === 401 || response.status === 403) {
+          throw new QlooAuthError('Qloo rejected the key (HTTP ' + response.status + '): ' + text.slice(0, 160));
+        }
+        if (response.status === 429 || response.status >= 500) {
+          lastError = new QlooHttpError(response.status, text, url.toString());
+          attempt += 1;
+          await this.backoff(attempt, response.headers.get('retry-after'));
+          continue;
+        }
+        if (!response.ok) {
+          throw new QlooHttpError(response.status, text, url.toString());
+        }
+        return JSON.parse(text) as unknown;
+      } catch (error) {
+        if (error instanceof QlooAuthError || error instanceof QlooHttpError) {
+          if (error instanceof QlooHttpError && error.status < 500 && error.status !== 429) throw error;
+          lastError = error;
+        } else {
+          lastError = error;
+        }
+        attempt += 1;
+        if (attempt > this.maxRetries) break;
+        await this.backoff(attempt, null);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  private async backoff(attempt: number, retryAfter: string | null): Promise<void> {
+    const headerMs = retryAfter ? Number(retryAfter) * 1000 : NaN;
+    const base = Number.isFinite(headerMs) ? headerMs : 250 * 2 ** (attempt - 1);
+    const jitter = Math.random() * 120;
+    await new Promise((resolve) => setTimeout(resolve, base + jitter));
+  }
+
+  /** Resolve a free-text name to Qloo entity ids. */
+  async search(query: string, type?: QlooDomain, take = 5): Promise<QlooEntity[]> {
+    const payload = await this.request('/search', {
+      query,
+      types: type ? DOMAIN_URN[type] : undefined,
+      take,
+    });
+    return this.normalise(payload, 'search');
+  }
+
+  /** Cross-domain affinity insights for a set of signal entities. */
+  async insights(options: {
+    filterType: QlooDomain;
+    signEntities?: string[];
+    signTags?: string[];
+    take?: number;
+    biasTrends?: 'off' | 'very_low' | 'low' | 'mid' | 'medium' | 'high' | 'very_high';
+    sortBy?: 'affinity' | 'rating' | 'distance' | 'quality';
+  }): Promise<QlooEntity[]> {
+    const params: Record<string, string | number | undefined> = {
+      'filter.type': DOMAIN_URN[options.filterType],
+      take: options.take ?? 10,
+      'bias.trends': options.biasTrends ?? 'medium',
+      sort_by: options.sortBy ?? 'affinity',
+    };
+    if (options.signEntities?.length) {
+      params['signal.interests.entities'] = options.signEntities.join(',');
+    }
+    if (options.signTags?.length) {
+      params['signal.interests.tags'] = options.signTags.join(',');
+    }
+    const payload = await this.request('/v2/insights', params);
+    return this.normalise(payload, 'insights');
+  }
+
+  /** Look up tag ids, used to keep insight filters valid. */
+  async tags(query: string, take = 5): Promise<Array<{ id: string; name: string }>> {
+    const payload = (await this.request('/v2/tags', { query, take })) as Record<string, unknown>;
+    const list = this.pickArray(payload);
+    return list.map((item) => {
+      const record = item as Record<string, unknown>;
+      return {
+        id: String(record.tag_id ?? record.id ?? record.urn ?? ''),
+        name: String(record.name ?? record.label ?? record.tag_id ?? ''),
+      };
+    });
   }
 
   /**
-   * Get entity by ID or search by name
+   * The response envelope is not identical across the lookup and insight
+   * endpoints, so the parser reads the documented candidates in order and keeps
+   * the raw record for every entity instead of dropping unknown fields.
    */
-  public async getEntity(idOrName: string): Promise<QlooEntity | null> {
-    const normalized = idOrName.toLowerCase().trim();
-    
-    // Direct ID match
-    if (QlooClient.CURATED_TASTE_GRAPH[normalized]) {
-      return QlooClient.CURATED_TASTE_GRAPH[normalized];
-    }
-
-    // Name or keyword match
-    for (const entity of Object.values(QlooClient.CURATED_TASTE_GRAPH)) {
-      if (
-        entity.name.toLowerCase().includes(normalized) ||
-        entity.subcategories.some(s => s.toLowerCase().includes(normalized)) ||
-        entity.tags.some(t => t.toLowerCase().includes(normalized))
-      ) {
+  private normalise(payload: unknown, source: 'search' | 'insights'): QlooEntity[] {
+    const list = this.pickArray(payload as Record<string, unknown>);
+    return list
+      .map((item) => {
+        const record = item as Record<string, unknown>;
+        const properties = (record.properties ?? {}) as Record<string, unknown>;
+        const id = String(record.entity_id ?? record.id ?? record.urn ?? properties.entity_id ?? '');
+        const name = String(record.name ?? properties.name ?? record.label ?? '');
+        if (!id && !name) return null;
+        const affinityRaw = record.affinity ?? record.score ?? record.relevance;
+        const affinity = typeof affinityRaw === 'number' ? affinityRaw : affinityRaw != null ? Number(affinityRaw) : null;
+        const tagsRaw = (record.tags ?? properties.tags ?? []) as unknown;
+        const tags = Array.isArray(tagsRaw)
+          ? tagsRaw.map((t) => (typeof t === 'string' ? t : String((t as Record<string, unknown>).name ?? ''))).filter(Boolean)
+          : [];
+        const entity: QlooEntity = {
+          id,
+          name,
+          type: String(record.type ?? properties.type ?? ''),
+          affinity: Number.isFinite(affinity as number) ? (affinity as number) : null,
+          tags,
+          raw: record,
+        };
         return entity;
-      }
+      })
+      .filter((entity): entity is QlooEntity => entity !== null)
+      .sort((a, b) => (b.affinity ?? -1) - (a.affinity ?? -1));
+  }
+
+  private pickArray(payload: Record<string, unknown>): unknown[] {
+    const candidates = ['entities', 'results', 'data', 'items'];
+    for (const key of candidates) {
+      const value = payload?.[key];
+      if (Array.isArray(value)) return value;
+    }
+    if (Array.isArray(payload)) return payload as unknown[];
+    return [];
+  }
+}

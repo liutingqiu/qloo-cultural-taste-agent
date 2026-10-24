@@ -1,0 +1,186 @@
+{
+  "query": {
+    "description": "shoegaze and slow cinema",
+    "seedDomain": "artist",
+    "targetDomains": [
+      "movie",
+      "place",
+      "artist"
+    ],
+    "take": 3
+  },
+  "seeds": [
+    {
+      "id": "qloo:artist:mbv",
+      "name": "My Bloody Valentine",
+      "type": "urn:entity:artist",
+      "affinity": null,
+      "tags": [],
+      "raw": {
+        "slug": "shoegaze",
+        "entity_id": "qloo:artist:mbv",
+        "name": "My Bloody Valentine",
+        "type": "urn:entity:artist",
+        "properties": {
+          "name": "My Bloody Valentine"
+        }
+      }
+    }
+  ],
+  "recommendations": [
+    {
+      "domain": "artist",
+      "id": "qloo:artist:cocteau",
+      "name": "Cocteau Twins",
+      "affinity": 0.71,
+      "tags": [
+        "dream-pop",
+        "ethereal"
+      ],
+      "viaSeed": "qloo:artist:mbv"
+    },
+    {
+      "domain": "place",
+      "id": "qloo:place:vinyl-bar",
+      "name": "Vinyl Listening Bar",
+      "affinity": 0.67,
+      "tags": [
+        "analog",
+        "nocturnal"
+      ],
+      "viaSeed": "qloo:artist:mbv"
+    },
+    {
+      "domain": "movie",
+      "id": "qloo:movie:chungking",
+      "name": "Chungking Express",
+      "affinity": 0.66,
+      "tags": [
+        "90s-hong-kong",
+        "romance"
+      ],
+      "viaSeed": "qloo:artist:mbv"
+    },
+    {
+      "domain": "movie",
+      "id": "qloo:movie:itmfl",
+      "name": "In the Mood for Love",
+      "affinity": 0.58,
+      "tags": [
+        "arthouse",
+        "melancholic",
+        "90s-hong-kong"
+      ],
+      "viaSeed": "qloo:artist:mbv"
+    },
+    {
+      "domain": "place",
+      "id": "qloo:place:kissaten",
+      "name": "Slow-Drip Kissaten",
+      "affinity": 0.47,
+      "tags": [
+        "analog",
+        "quiet"
+      ],
+      "viaSeed": "qloo:artist:mbv"
+    },
+    {
+      "domain": "movie",
+      "id": "qloo:movie:br2049",
+      "name": "Blade Runner 2049",
+      "affinity": 0.41,
+      "tags": [
+        "cyberpunk",
+        "meditative"
+      ],
+      "viaSeed": "qloo:artist:mbv"
+    },
+    {
+      "domain": "artist",
+      "id": "qloo:artist:aphex",
+      "name": "Aphex Twin",
+      "affinity": 0.39,
+      "tags": [
+        "idm",
+        "cerebral"
+      ],
+      "viaSeed": "qloo:artist:mbv"
+    },
+    {
+      "domain": "place",
+      "id": "qloo:place:natural-wine",
+      "name": "Natural Wine Bistrot",
+      "affinity": 0.36,
+      "tags": [
+        "fermented",
+        "convivial"
+      ],
+      "viaSeed": "qloo:artist:mbv"
+    }
+  ],
+  "trace": [
+    {
+      "step": "search.seeds",
+      "domain": "artist",
+      "ok": true,
+      "entityCount": 1,
+      "durationMs": 57
+    },
+    {
+      "step": "insights.movie<-My Bloody Valentine",
+      "domain": "movie",
+      "ok": true,
+      "entityCount": 3,
+      "durationMs": 50
+    },
+    {
+      "step": "insights.place<-My Bloody Valentine",
+      "domain": "place",
+      "ok": true,
+      "entityCount": 3,
+      "durationMs": 62
+    },
+    {
+      "step": "insights.artist<-My Bloody Valentine",
+      "domain": "artist",
+      "ok": true,
+      "entityCount": 2,
+      "durationMs": 45
+    }
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/search?query=shoegaze+and+slow+cinema&types=urn%3Aentity%3Aartist&take=3",
+      "status": 200,
+      "durationMs": 57,
+      "attempt": 0,
+      "endpoint": "/search"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v2/insights?filter.type=urn%3Aentity%3Amovie&take=3&bias.trends=medium&sort_by=affinity&signal.interests.entities=qloo%3Aartist%3Ambv",
+      "status": 200,
+      "durationMs": 49,
+      "attempt": 0,
+      "endpoint": "/v2/insights"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v2/insights?filter.type=urn%3Aentity%3Aplace&take=3&bias.trends=medium&sort_by=affinity&signal.interests.entities=qloo%3Aartist%3Ambv",
+      "status": 200,
+      "durationMs": 62,
+      "attempt": 0,
+      "endpoint": "/v2/insights"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8787/v2/insights?filter.type=urn%3Aentity%3Aartist&take=3&bias.trends=medium&sort_by=affinity&signal.interests.entities=qloo%3Aartist%3Ambv",
+      "status": 200,
+      "durationMs": 45,
+      "attempt": 0,
+      "endpoint": "/v2/insights"
+    }
+  ],
+  "errors": []
+}

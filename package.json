@@ -1,23 +1,29 @@
 {
   "name": "qloo-cultural-taste-agent",
-  "version": "1.0.0",
-  "description": "Autonomous AI Agent with Cross-Domain Cultural Intelligence & Qloo Taste Graph Grounding",
+  "version": "2.0.0",
+  "description": "Cross-domain taste agent grounded in the Qloo Insights API",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
+    "build": "tsc",
     "test": "node --test tests/*.test.js",
-    "build": "tsc"
+    "contract": "node scripts/contract-server.mjs --port 8787",
+    "cli": "node dist/cli.js"
   },
   "keywords": [
     "qloo",
-    "agentic-ai",
-    "cultural-intelligence",
     "taste-graph",
+    "agentic-ai",
     "mcp",
-    "model-context-protocol",
-    "recommendations",
-    "cross-domain"
+    "recommendations"
   ],
   "author": "Tingqiu Liu <tianqi689@gmail.com>",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }
