@@ -61,41 +61,58 @@ domain x seed), merges results by `domain:id` keeping the highest affinity, sort
 records a trace step per call with `ok`, `entityCount` and `durationMs`. A failed step is recorded
 and skipped; it does not abort the run or fabricate a row.
 
-## 6. Measured run
+## 6. Measured run (live)
 
-Executed against `scripts/contract-server.mjs` on 2026-10-24 (Node 26, local loopback), because the
-hackathon key request was submitted today and keys are issued over a few business days:
+Executed against the hackathon API with the issued key on 2026-10-26:
+
+    QLOO_API_KEY=... npm run cli -- --description "shoegaze" --seed artist \
+      --domains artist,movie,place --take 4 --out runs/live2
 
 | Metric | Value |
 | --- | --- |
-| Seed entities resolved | 1 |
-| Recommendations returned | 8 (artist 2, place 3, movie 3) |
-| HTTP requests | 4 |
-| Retries | 0 |
+| Endpoint | https://hackathon.api.qloo.com |
+| Tags resolved | 4, first is urn:tag:genre:music:shoegaze |
+| Seed entities | 1 |
+| Recommendations | 12 (artist 4, movie 4, place 4) |
+| HTTP requests | 5 (tags, search, three insights) |
+| Retries | 1, a 429 retried under the configured policy |
 | Status codes | 200 |
-| Latency p50 / p95 / max | 57 ms / 62 ms / 62 ms |
-| Wall clock | 214 ms |
+| Latency p50 / p95 | 4963 ms / 9192 ms |
+| Wall clock | 35.9 s |
 | Tests | 7 passed |
 
-These latencies measure the client, the retry logic and the parser against a local socket with a
-35 ms injected delay. They are not Qloo network latencies and are not presented as such.
+The output is culturally coherent rather than random. The artist bucket returned 東京酒吐座, Burrrn,
+Shojoskip and Tatuki Seksu - the Japanese shoegaze scene. The movie bucket returned Love Exposure,
+After the Storm, A Bride for Rip Van Winkle and Shoplifters - Sion Sono and Hirokazu Kore-eda. The
+place bucket returned live-music rooms such as Thalia Hall and Union Transfer. Nothing in this
+repository knows those names; they are the API's answers to a tag signal.
 
-## 7. What the contract server is and is not
+## 7. What the live run changed
 
-`scripts/contract-server.mjs` is a transport fixture: it implements `/search`, `/v2/insights` and
-`/v2/tags` with the documented envelope, key checking, 401/404 paths, and optional latency and
-429 injection. It exists so auth handling, retries, timeouts, parsing and merging can be tested
-without a key, and so a judge can rerun everything offline.
+Four things only a real key could reveal, each a bug in the pre-key code:
 
-It is **not** a data source for the submission. The fixture holds a few dozen entities and exists
-to exercise code paths. When the hackathon key arrives, the same binary runs with
-`QLOO_BASE_URL` unset and a real `QLOO_API_KEY`; nothing in `src/` changes.
+1. **`/v2/insights` nests its payload.** The envelope is `{"success": true, "results": {"entities": [...]}}`,
+   not a top-level array. The parser had to descend into `results.entities`.
+2. **Affinity lives in `query.affinity`**, per entity, not at the top level. Before the fix every
+   score was null and the ranking fell back to alphabetical order.
+3. **`/search` matches names, not concepts.** "shoegaze and slow cinema" resolved to acts literally
+   named Cinema, which then produced airport and museum recommendations. `/v2/tags` with
+   `filter.query` understands genre vocabulary, so tags are resolved first and passed as
+   `signal.interests.tags` alongside any entity signals. This is the difference between a plausible
+   demo and a useful one.
+4. **`/v2/tags` requires `filter.query`.** A bare `query=` returns 400 listing the accepted parameters.
 
-## 8. Limitations
+## 8. Scope after the key arrived
 
-* No live Qloo run yet - key pending. The integration is complete and testable, the data is not real.
-* No relevance evaluation: there is no labelled set of "correct" cross-domain pairs, so this report
-  gives transport and pipeline metrics, not recommendation quality.
-* Affinity is used as returned. No calibration or normalisation is applied across domains, so a
-  movie score and a place score are not directly comparable even though the UI sorts them together.
+The contract server stays in the repository as the offline fixture (the 7 tests run against it) and
+now mirrors the live envelope. The recorded run on the project page is the live one: `data/` holds
+artifacts with `"endpoint": "qloo-hackathon-api"`.
+
+Still true, and stated rather than hidden:
+
+* No relevance benchmark. The output is inspectable and coherent, but there is no labelled set
+  against which to compute precision.
+* Affinity is returned unnormalised across domains; a place score and a movie score are not
+  directly comparable even though the UI sorts them together.
+* Tag resolution depends on the free-text description; a vague query still yields vague tags.
 * MCP tools are defined and callable, but no client has been tested against them beyond unit level.

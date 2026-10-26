@@ -167,13 +167,15 @@ export class QlooClient {
     }
     /** Look up tag ids, used to keep insight filters valid. */
     async tags(query, take = 5) {
-        const payload = (await this.request('/v2/tags', { query, take }));
+        // /v2/tags expects filter.query; a bare query= is rejected with 400.
+        const payload = (await this.request('/v2/tags', { 'filter.query': query, take }));
         const list = this.pickArray(payload);
         return list.map((item) => {
             const record = item;
             return {
                 id: String(record.tag_id ?? record.id ?? record.urn ?? ''),
                 name: String(record.name ?? record.label ?? record.tag_id ?? ''),
+                popularity: typeof record.popularity === 'number' ? record.popularity : null,
             };
         });
     }
@@ -192,7 +194,10 @@ export class QlooClient {
             const name = String(record.name ?? properties.name ?? record.label ?? '');
             if (!id && !name)
                 return null;
-            const affinityRaw = record.affinity ?? record.score ?? record.relevance;
+            // /v2/insights returns the score inside a per-entity query object:
+            // {"query": {"affinity": 0.92, "measurements": {...}}}. /search has none.
+            const query = (record.query ?? {});
+            const affinityRaw = record.affinity ?? query.affinity ?? record.score ?? record.relevance;
             const affinity = typeof affinityRaw === 'number' ? affinityRaw : affinityRaw != null ? Number(affinityRaw) : null;
             const tagsRaw = (record.tags ?? properties.tags ?? []);
             const tags = Array.isArray(tagsRaw)
@@ -201,7 +206,7 @@ export class QlooClient {
             const entity = {
                 id,
                 name,
-                type: String(record.type ?? properties.type ?? ''),
+                type: String(record.subtype ?? record.type ?? properties.type ?? ''),
                 affinity: Number.isFinite(affinity) ? affinity : null,
                 tags,
                 raw: record,
@@ -211,12 +216,25 @@ export class QlooClient {
             .filter((entity) => entity !== null)
             .sort((a, b) => (b.affinity ?? -1) - (a.affinity ?? -1));
     }
+    /**
+     * /search answers with a bare {"results": [...]} array, while /v2/insights wraps
+     * the list one level deeper: {"success": true, "results": {"entities": [...]}}.
+     * Both shapes are read here so the caller does not have to care.
+     */
     pickArray(payload) {
-        const candidates = ['entities', 'results', 'data', 'items'];
+        const candidates = ['entities', 'results', 'data', 'items', 'outcomes'];
         for (const key of candidates) {
             const value = payload?.[key];
             if (Array.isArray(value))
                 return value;
+            if (value && typeof value === 'object') {
+                const box = value;
+                for (const inner of ['entities', 'tags']) {
+                    const nested = box[inner];
+                    if (Array.isArray(nested))
+                        return nested;
+                }
+            }
         }
         if (Array.isArray(payload))
             return payload;

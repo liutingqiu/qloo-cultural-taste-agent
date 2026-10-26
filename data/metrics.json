@@ -1,23 +1,23 @@
 {
   "seeds": 1,
-  "recommendations": 8,
+  "recommendations": 12,
   "byDomain": {
-    "artist": 2,
-    "place": 3,
-    "movie": 3
+    "place": 4,
+    "artist": 4,
+    "movie": 4
   },
-  "requests": 4,
-  "retries": 0,
+  "requests": 5,
+  "retries": 1,
   "httpStatuses": [
     200
   ],
   "latencyMs": {
-    "p50": 57,
-    "p95": 62,
-    "max": 62
+    "p50": 4963,
+    "p95": 9192,
+    "max": 9192
   },
   "errors": [],
-  "wallMs": 214,
-  "endpoint": "contract-server",
-  "baseUrl": "http://127.0.0.1:8787"
+  "wallMs": 35874,
+  "endpoint": "qloo-hackathon-api",
+  "baseUrl": "https://hackathon.api.qloo.com"
 }

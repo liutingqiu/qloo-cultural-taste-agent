@@ -1,33 +1,41 @@
 [
   {
     "method": "GET",
-    "url": "http://127.0.0.1:8787/search?query=shoegaze+and+slow+cinema&types=urn%3Aentity%3Aartist&take=3",
+    "url": "https://hackathon.api.qloo.com/v2/tags?filter.query=shoegaze&take=4",
     "status": 200,
-    "durationMs": 57,
+    "durationMs": 2721,
+    "attempt": 0,
+    "endpoint": "/v2/tags"
+  },
+  {
+    "method": "GET",
+    "url": "https://hackathon.api.qloo.com/search?query=shoegaze&types=urn%3Aentity%3Aartist&take=3",
+    "status": 200,
+    "durationMs": 1514,
     "attempt": 0,
     "endpoint": "/search"
   },
   {
     "method": "GET",
-    "url": "http://127.0.0.1:8787/v2/insights?filter.type=urn%3Aentity%3Amovie&take=3&bias.trends=medium&sort_by=affinity&signal.interests.entities=qloo%3Aartist%3Ambv",
+    "url": "https://hackathon.api.qloo.com/v2/insights?filter.type=urn%3Aentity%3Aartist&take=4&bias.trends=medium&sort_by=affinity&signal.interests.entities=262613D7-6419-4144-9559-B6858C27F1D3&signal.interests.tags=urn%3Atag%3Agenre%3Amusic%3Ashoegaze%2Curn%3Atag%3Agenre%3Amusic%3Ashoe_gaze%2Curn%3Atag%3Agenre%3Amusic%3Ashoegazer",
     "status": 200,
-    "durationMs": 49,
+    "durationMs": 4963,
+    "attempt": 1,
+    "endpoint": "/v2/insights"
+  },
+  {
+    "method": "GET",
+    "url": "https://hackathon.api.qloo.com/v2/insights?filter.type=urn%3Aentity%3Amovie&take=4&bias.trends=medium&sort_by=affinity&signal.interests.entities=262613D7-6419-4144-9559-B6858C27F1D3&signal.interests.tags=urn%3Atag%3Agenre%3Amusic%3Ashoegaze%2Curn%3Atag%3Agenre%3Amusic%3Ashoe_gaze%2Curn%3Atag%3Agenre%3Amusic%3Ashoegazer",
+    "status": 200,
+    "durationMs": 5190,
     "attempt": 0,
     "endpoint": "/v2/insights"
   },
   {
     "method": "GET",
-    "url": "http://127.0.0.1:8787/v2/insights?filter.type=urn%3Aentity%3Aplace&take=3&bias.trends=medium&sort_by=affinity&signal.interests.entities=qloo%3Aartist%3Ambv",
+    "url": "https://hackathon.api.qloo.com/v2/insights?filter.type=urn%3Aentity%3Aplace&take=4&bias.trends=medium&sort_by=affinity&signal.interests.entities=262613D7-6419-4144-9559-B6858C27F1D3&signal.interests.tags=urn%3Atag%3Agenre%3Amusic%3Ashoegaze%2Curn%3Atag%3Agenre%3Amusic%3Ashoe_gaze%2Curn%3Atag%3Agenre%3Amusic%3Ashoegazer",
     "status": 200,
-    "durationMs": 62,
-    "attempt": 0,
-    "endpoint": "/v2/insights"
-  },
-  {
-    "method": "GET",
-    "url": "http://127.0.0.1:8787/v2/insights?filter.type=urn%3Aentity%3Aartist&take=3&bias.trends=medium&sort_by=affinity&signal.interests.entities=qloo%3Aartist%3Ambv",
-    "status": 200,
-    "durationMs": 45,
+    "durationMs": 9192,
     "attempt": 0,
     "endpoint": "/v2/insights"
   }

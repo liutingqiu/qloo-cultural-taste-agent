@@ -60,38 +60,48 @@ export class TasteAgent {
         const trace = [];
         const errors = [];
         const take = request.take ?? 10;
+        // Two signal sources, because /search matches names and a free-text taste
+        // description is rarely a name: "shoegaze and slow cinema" resolves to acts
+        // literally called Cinema. /v2/tags with filter.query understands genre
+        // vocabulary, so tags are resolved first and used alongside any entities.
+        const tagRun = await this.time('tags.resolve', undefined, () => this.client.tags(request.description, 4), (tags) => tags.length);
+        trace.push(tagRun.step);
+        const tagIds = (tagRun.value ?? []).map((tag) => tag.id).filter(Boolean).slice(0, 3);
         const seedRun = await this.time('search.seeds', request.seedDomain, () => this.client.search(request.description, request.seedDomain, 3), (entities) => entities.length);
         trace.push(seedRun.step);
         const seeds = uniqueById(seedRun.value ?? []);
-        if (!seeds.length) {
-            errors.push(seedRun.step.detail ?? 'no seed entity resolved for the description');
+        if (!seeds.length && !tagIds.length) {
+            errors.push(seedRun.step.detail ?? 'neither entity nor tag signal resolved for the description');
             return { query: request, seeds: [], recommendations: [], trace, requests: [...this.requests], errors };
         }
         const pooled = new Map();
         for (const domain of request.targetDomains) {
-            for (const seed of seeds) {
-                const label = 'insights.' + domain + '<-' + (seed.name || seed.id);
-                const run = await this.time(label, domain, () => this.client.insights({ filterType: domain, signEntities: [seed.id], take }), (entities) => entities.length);
-                trace.push(run.step);
-                if (!run.step.ok) {
-                    if (run.step.detail)
-                        errors.push(run.step.detail);
-                    continue;
-                }
-                for (const entity of run.value ?? []) {
-                    const key = domain + ':' + entity.id;
-                    const candidate = {
-                        domain,
-                        id: entity.id,
-                        name: entity.name,
-                        affinity: entity.affinity,
-                        tags: entity.tags,
-                        viaSeed: seed.id,
-                    };
-                    const existing = pooled.get(key);
-                    if (!existing || (candidate.affinity ?? -1) > (existing.affinity ?? -1)) {
-                        pooled.set(key, candidate);
-                    }
+            const label = 'insights.' + domain + '<-' + (tagIds[0] ?? seeds[0]?.id ?? 'signal');
+            const run = await this.time(label, domain, () => this.client.insights({
+                filterType: domain,
+                signEntities: seeds.slice(0, 2).map((seed) => seed.id),
+                signTags: tagIds,
+                take,
+            }), (entities) => entities.length);
+            trace.push(run.step);
+            if (!run.step.ok) {
+                if (run.step.detail)
+                    errors.push(run.step.detail);
+                continue;
+            }
+            for (const entity of run.value ?? []) {
+                const key = domain + ':' + entity.id;
+                const candidate = {
+                    domain,
+                    id: entity.id,
+                    name: entity.name,
+                    affinity: entity.affinity,
+                    tags: entity.tags,
+                    viaSeed: tagIds[0] ?? seeds[0]?.id ?? '',
+                };
+                const existing = pooled.get(key);
+                if (!existing || (candidate.affinity ?? -1) > (existing.affinity ?? -1)) {
+                    pooled.set(key, candidate);
                 }
             }
         }

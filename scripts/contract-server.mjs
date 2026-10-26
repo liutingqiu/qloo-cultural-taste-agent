@@ -90,9 +90,15 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === "/v2/tags") {
-    const query = (url.searchParams.get("query") ?? "").toLowerCase();
+    // The documented parameter is filter.query; a bare query= is rejected upstream,
+    // so the fixture accepts it only as a legacy fallback.
+    const raw = url.searchParams.get("filter.query") ?? url.searchParams.get("query") ?? "";
+    if (!url.searchParams.get("filter.query") && !url.searchParams.get("query")) {
+      return send(res, 400, { errors: [{ message: "At least one of the following parameters must be provided: filter.query" }] });
+    }
+    const query = raw.toLowerCase();
     const matched = fixtures.tags.filter((tag) => tag.name.toLowerCase().includes(query) || query.includes(tag.name.toLowerCase()));
-    return send(res, 200, { tags: matched });
+    return send(res, 200, { success: true, results: { tags: matched } });
   }
 
   return send(res, 404, { error: "no_route", path: url.pathname });

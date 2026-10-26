@@ -75,6 +75,7 @@ export declare class QlooClient {
     tags(query: string, take?: number): Promise<Array<{
         id: string;
         name: string;
+        popularity: number | null;
     }>>;
     /**
      * The response envelope is not identical across the lookup and insight
@@ -82,5 +83,10 @@ export declare class QlooClient {
      * the raw record for every entity instead of dropping unknown fields.
      */
     private normalise;
+    /**
+     * /search answers with a bare {"results": [...]} array, while /v2/insights wraps
+     * the list one level deeper: {"success": true, "results": {"entities": [...]}}.
+     * Both shapes are read here so the caller does not have to care.
+     */
     private pickArray;
 }

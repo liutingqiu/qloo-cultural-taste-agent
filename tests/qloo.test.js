@@ -119,11 +119,13 @@ test("agent resolves seeds, queries every target domain, and traces each call", 
     });
     assert.ok(result.seeds.length > 0, "seed resolution must return entities");
     assert.ok(result.recommendations.length > 0);
-    assert.equal(result.requests.length, result.seeds.length * 2 + 1);
+    // tags.resolve + search.seeds + one insights call per target domain
+    assert.equal(result.requests.length, result.seeds.length > 0 ? 1 + 1 + 2 : 1 + 2);
     const domains = new Set(result.recommendations.map((rec) => rec.domain));
     assert.deepEqual([...domains].sort(), ["movie", "place"]);
     assert.ok(result.trace.every((step) => step.ok));
     assert.ok(result.trace.some((step) => step.step.startsWith("search.seeds")));
+    assert.ok(result.trace.some((step) => step.step === "tags.resolve"));
     for (const rec of result.recommendations) {
       assert.ok(rec.id.length > 0);
       assert.equal(typeof rec.affinity, "number");
@@ -143,7 +145,7 @@ test("agent reports an error instead of inventing entities when search is empty"
       seedDomain: "artist",
       targetDomains: ["movie"],
     });
-    assert.ok(result.trace.length >= 1);
+    assert.ok(result.trace.length >= 2, "tags and search are both attempted before giving up");
     assert.equal(typeof result.errors, "object");
   } finally {
     await stopServer(child);
